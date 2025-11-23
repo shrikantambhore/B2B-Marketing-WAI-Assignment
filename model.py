@@ -1,5 +1,6 @@
 
-import pickle, os, pandas as pd
+import pickle as os, 
+import pandas as pd
 
 def load_models(model_dir="models"):
     clf_path = os.path.join(model_dir, "lead_scoring_clf.pkl")
