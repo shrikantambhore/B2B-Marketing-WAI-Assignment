@@ -17,7 +17,7 @@ st.set_page_config(page_title="B2B Lead Scoring & CLV Dashboard", layout="wide")
 # Configuration / Helpers
 # ------------------------
 DEFAULT_CSV_PATH = "b2b_synthetic_dataset.csv"  # default dataset included in environment
-MODEL_DIRS = ["models", "/mnt/data/b2b_lead_scoring_project", "/mnt/data"]  # places to look for pickles
+MODEL_DIRS = ["models", "b2b_lead_scoring_project", "/mnt/data"]  # places to look for pickles
 
 @st.cache_data
 def load_models():
