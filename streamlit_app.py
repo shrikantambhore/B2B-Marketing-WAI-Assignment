@@ -10,6 +10,7 @@ import numpy as np
 import os
 import pickle
 from io import BytesIO
+from typing import Tuple, Optional
 
 st.set_page_config(page_title="B2B Lead Scoring & CLV Dashboard", layout="wide")
 
@@ -20,25 +21,46 @@ DEFAULT_CSV_PATH = "b2b_synthetic_dataset.csv"  # default dataset included in en
 MODEL_DIRS = ["models", "b2b_lead_scoring_project", "/mnt/data"]  # places to look for pickles
 
 @st.cache_data
-def load_models():
+import os
+import pickle
+import streamlit as st
+from typing import Tuple, Optional
+
+@st.cache_data(show_spinner=False)
+def load_models() -> Tuple[Optional[object], Optional[object]]:
+    """
+    Simplified loader: loads model pickles from the local 'models/' folder.
+    Expected files:
+      - models/lead_scoring_clf.pkl
+      - models/clv_regressor.pkl
+
+    Returns:
+      (clf, reg) where either can be None if file not found or load fails.
+    """
     clf = None
     reg = None
-    # try several possible locations for pickles
-    for d in MODEL_DIRS:
-        try_clf = os.path.join(d, "models/lead_scoring_clf.pkl")
-        try_reg = os.path.join(d, "models/clv_regressor.pkl")
-        if os.path.exists(try_clf):
-            try:
-                with open(try_clf, "rb") as f:
-                    clf = pickle.load(f)
-            except Exception:
-                clf = None
-        if os.path.exists(try_reg):
-            try:
-                with open(try_reg, "rb") as f:
-                    reg = pickle.load(f)
-            except Exception:
-                reg = None
+
+    clf_path = "models/lead_scoring_clf.pkl"
+    reg_path = "models/clv_regressor.pkl"
+
+    # Try classifier
+    if os.path.exists(clf_path):
+        try:
+            with open(clf_path, "rb") as f:
+                clf = pickle.load(f)
+        except Exception as e:
+            st.warning(f"Failed to load classifier pickle ({clf_path}): {e}")
+            clf = None
+
+    # Try regressor
+    if os.path.exists(reg_path):
+        try:
+            with open(reg_path, "rb") as f:
+                reg = pickle.load(f)
+        except Exception as e:
+            st.warning(f"Failed to load regressor pickle ({reg_path}): {e}")
+            reg = None
+
     return clf, reg
 
 def heuristic_lead_score(df):
