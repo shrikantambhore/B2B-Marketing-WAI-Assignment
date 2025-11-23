@@ -25,7 +25,7 @@ def load_models():
     reg = None
     # try several possible locations for pickles
     for d in MODEL_DIRS:
-        try_clf = os.path.join(d, "lead_scoring_clf.pkl")
+        try_clf = os.path.join(d, "models/lead_scoring_clf.pkl")
         try_reg = os.path.join(d, "models/clv_regressor.pkl")
         if os.path.exists(try_clf):
             try:
