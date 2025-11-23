@@ -4,7 +4,7 @@ import pandas as pd
 
 def load_models(model_dir="models"):
     clf_path = os.path.join(model_dir, "models/lead_scoring_clf.pkl")
-    reg_path = os.path.join(model_dir, "clv_regressor.pkl")
+    reg_path = os.path.join(model_dir, "models/clv_regressor.pkl")
     models = {}
     if os.path.exists(clf_path):
         models['clf'] = pickle.load(open(clf_path, "rb"))
