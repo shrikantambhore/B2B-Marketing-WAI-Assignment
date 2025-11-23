@@ -118,10 +118,17 @@ def train_models_on_the_fly(df: pd.DataFrame):
         'demo_requested','days_since_last_activity','historical_purchase_count','months_since_first_contact'
     ]
 
-    preprocessor = ColumnTransformer([
-        ('num', StandardScaler(), numeric),
-        ('cat', OneHotEncoder(handle_unknown='ignore', sparse=False), categorical),
-    ], remainder='drop')
+try:
+    encoder = OneHotEncoder(handle_unknown='ignore', sparse_output=False)
+except TypeError:
+    encoder = OneHotEncoder(handle_unknown='ignore', sparse=False)
+
+preprocessor = ColumnTransformer([
+    ('num', StandardScaler(), numeric),
+    ('cat', encoder, categorical),
+])
+
+
 
     # Train-test split (stratify classification)
     X_train, X_test, y_train_cls, y_test_cls = train_test_split(X, y_cls, test_size=0.2, random_state=42, stratify=y_cls)
