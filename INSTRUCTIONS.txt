@@ -1,0 +1,10 @@
+
+Files:
+- b2b_synthetic_dataset.csv : synthetic data
+- streamlit_app.py : Streamlit app
+- model.py : helpers
+- models/ : put trained model pickles here (optional)
+
+To run:
+pip install -r requirements.txt
+streamlit run streamlit_app.py
