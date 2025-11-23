@@ -1,7 +1,7 @@
 # streamlit_app.py
 """
-B2B Lead Scoring & CLV Dashboard
-Usage: streamlit run streamlit_app.py
+B2B Lead Scoring & CLV Dashboard (Optimized model loading)
+Run: streamlit run streamlit_app.py
 """
 
 import streamlit as st
@@ -9,68 +9,143 @@ import pandas as pd
 import numpy as np
 import os
 import pickle
-from io import BytesIO
+import requests
+from io import BytesIO, StringIO
+from pathlib import Path
+from typing import Tuple
 
 st.set_page_config(page_title="B2B Lead Scoring & CLV Dashboard", layout="wide")
 
 # ------------------------
-# Configuration / Helpers
+# Configuration
 # ------------------------
-DEFAULT_CSV_PATH = "b2b_synthetic_dataset.csv"  # default dataset included in environment
-MODEL_DIRS = ["models", "b2b_lead_scoring_project", "/mnt/data"]  # places to look for pickles
+# Default dataset path (you uploaded this earlier in the environment)
+DEFAULT_CSV_PATH = "/mnt/data/b2b_synthetic_dataset.csv"
 
-@st.cache_data
-def load_models():
+# Model filenames expected in a models/ folder in the repo root
+MODEL_FILENAMES = {
+    "clf": "lead_scoring_clf.pkl",
+    "reg": "clv_regressor.pkl"
+}
+
+# ------------------------
+# Helpers: model loading
+# ------------------------
+@st.cache_data(show_spinner=False)
+def load_pickle_from_local(path: str):
+    """Load a pickle from a local file path if it exists, else return None."""
+    try:
+        if os.path.exists(path):
+            with open(path, "rb") as f:
+                return pickle.load(f)
+    except Exception as e:
+        st.debug(f"Local pickle load failed for {path}: {e}")
+    return None
+
+@st.cache_data(show_spinner=False)
+def download_file(url: str, timeout=20) -> bytes:
+    """Download a file and return bytes, or raise."""
+    resp = requests.get(url, timeout=timeout)
+    resp.raise_for_status()
+    return resp.content
+
+@st.cache_data(show_spinner=False)
+def fetch_model_from_github(owner_repo: str, branch: str, filename: str) -> bytes:
+    """
+    Download a file from GitHub raw URL.
+    owner_repo: "owner/repo"
+    branch: branch name (e.g., "main")
+    filename: path within repo (e.g., "models/lead_scoring_clf.pkl")
+    Returns bytes if successful, else raises.
+    """
+    raw_url = f"https://raw.githubusercontent.com/{owner_repo}/{branch}/{filename}"
+    return download_file(raw_url)
+
+@st.cache_data(show_spinner=False)
+def load_models(github_repo: str = "", github_branch: str = "main") -> Tuple[object, object, dict]:
+    """
+    Try loading classifier and regressor in this order:
+      1) Local models/ folder in repo (models/<filename>)
+      2) Attempt to fetch from GitHub raw (if github_repo provided)
+      3) Return (None, None) if both fail.
+
+    Returns (clf, reg, info) where info contains paths/urls tried (for debugging).
+    """
+    info = {"tried_local": [], "tried_github": [], "loaded": {"clf": False, "reg": False}}
     clf = None
     reg = None
-    # try several possible locations for pickles
-    for d in MODEL_DIRS:
-        try_clf = os.path.join(d, "lead_scoring_clf.pkl")
-        try_reg = os.path.join(d, "clv_regressor.pkl")
-        if os.path.exists(try_clf):
-            try:
-                with open(try_clf, "rb") as f:
-                    clf = pickle.load(f)
-            except Exception:
-                clf = None
-        if os.path.exists(try_reg):
-            try:
-                with open(try_reg, "rb") as f:
-                    reg = pickle.load(f)
-            except Exception:
-                reg = None
-    return clf, reg
 
-def heuristic_lead_score(df):
-    """
-    Compute a normalized heuristic lead score (0-1) from available fields.
-    This runs if no model pickle is available.
-    """
+    # 1) Try repo-local models folder
+    repo_local_models = Path("models")
+    for key, fname in MODEL_FILENAMES.items():
+        p = repo_local_models / fname
+        info["tried_local"].append(str(p))
+        m = load_pickle_from_local(str(p))
+        if m is not None:
+            if key == "clf":
+                clf = m
+                info["loaded"]["clf"] = True
+            else:
+                reg = m
+                info["loaded"]["reg"] = True
+
+    # 2) Try /mnt/data (useful in ephemeral environments or when uploading)
+    for key, fname in MODEL_FILENAMES.items():
+        if (key == "clf" and clf is not None) or (key == "reg" and reg is not None):
+            continue
+        p = Path("/mnt/data") / fname
+        info["tried_local"].append(str(p))
+        m = load_pickle_from_local(str(p))
+        if m is not None:
+            if key == "clf":
+                clf = m
+                info["loaded"]["clf"] = True
+            else:
+                reg = m
+                info["loaded"]["reg"] = True
+
+    # 3) If github repo provided, try raw.githubusercontent.com
+    if github_repo:
+        for key, fname in MODEL_FILENAMES.items():
+            if (key == "clf" and clf is not None) or (key == "reg" and reg is not None):
+                continue
+            target = f"models/{fname}"
+            info["tried_github"].append(target)
+            try:
+                b = fetch_model_from_github(github_repo, github_branch, target)
+                # load bytes into pickle
+                obj = pickle.loads(b)
+                if key == "clf":
+                    clf = obj
+                    info["loaded"]["clf"] = True
+                else:
+                    reg = obj
+                    info["loaded"]["reg"] = True
+            except Exception as e:
+                # store failure message (do not raise)
+                info.setdefault("errors", []).append({"target": target, "error": str(e)})
+
+    return clf, reg, info
+
+# ------------------------
+# Heuristics (fallback)
+# ------------------------
+def heuristic_lead_score(df: pd.DataFrame) -> pd.Series:
     df = df.copy()
-    # ensure columns exist
     for c in ['website_visits_30d','email_clicks_30d','demo_requested','days_since_last_activity','historical_purchase_count','company_size','deal_stage']:
         if c not in df.columns:
             df[c] = 0
-
-    # numeric contributions
     v = df['website_visits_30d'].astype(float).fillna(0)
     clicks = df['email_clicks_30d'].astype(float).fillna(0)
     demo = df['demo_requested'].astype(float).fillna(0)
     hist = df['historical_purchase_count'].astype(float).fillna(0)
     recency = df['days_since_last_activity'].astype(float).fillna(999)
-
-    # basic scoring: visits + clicks*2 + demo*10 + historical*5 - recency*0.02
     raw = v + 2*clicks + 10*demo + 5*hist - 0.02*recency
-
-    # add categorical boosts
     size_map = {'Small':1.0, 'Medium':1.8, 'Large':3.5}
     stage_map = {'Lead':1.0, 'MQL':1.3, 'SQL':1.7, 'Opportunity':2.0, 'Closed Won':2.5, 'Closed Lost':0.5}
     size_factor = df['company_size'].map(size_map).fillna(1.0)
     stage_factor = df['deal_stage'].map(stage_map).fillna(1.0)
-
     raw = raw * size_factor * stage_factor
-
-    # normalize to 0..1
     minr = raw.min()
     maxr = raw.max()
     if maxr - minr == 0:
@@ -79,10 +154,7 @@ def heuristic_lead_score(df):
         score = (raw - minr) / (maxr - minr)
     return score.clip(0,1)
 
-def heuristic_clv(df):
-    """
-    Heuristic CLV estimation based on company size, historical purchases and revenue.
-    """
+def heuristic_clv(df: pd.DataFrame) -> pd.Series:
     df = df.copy()
     if 'annual_revenue_musd' not in df.columns:
         df['annual_revenue_musd'] = 0.0
@@ -90,35 +162,40 @@ def heuristic_clv(df):
         df['company_size'] = 'Small'
     if 'historical_purchase_count' not in df.columns:
         df['historical_purchase_count'] = 0
-
     size_multiplier = df['company_size'].map({'Small':1.0,'Medium':3.0,'Large':8.0}).fillna(1.0)
     base = 1000 + 2000 * df['historical_purchase_count'].astype(float) + 5000 * (df.get('converted', 0).astype(float))
     clv = (base * size_multiplier) + df['annual_revenue_musd'].astype(float) * 500
-    # add noise and floor
     clv = clv + np.random.normal(0, 1500, size=len(clv))
     return clv.clip(lower=0)
 
-def prepare_input(df):
-    """Return a copy with minimal cleaning (drop unnamed columns)"""
+def prepare_input(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    # drop unnamed index columns
-    df = df.loc[:, ~df.columns.str.contains("^Unnamed")]
+    df = df.loc[:, ~df.columns.str.contains("^Unnamed", regex=True)]
     return df
 
-def to_csv_bytes(df):
+def to_csv_bytes(df: pd.DataFrame) -> BytesIO:
     b = BytesIO()
     df.to_csv(b, index=False)
     b.seek(0)
     return b
 
 # ------------------------
-# UI - Sidebar
+# Sidebar UI: allow user to specify GitHub repo/branch
 # ------------------------
 st.sidebar.header("Inputs & Models")
 uploaded = st.sidebar.file_uploader("Upload leads CSV (optional)", type=["csv"])
-use_default = st.sidebar.checkbox("Use default synthetic dataset", value=(uploaded is None))
-st.sidebar.markdown("**Model options**")
-clf, reg = load_models()
+use_default = st.sidebar.checkbox("Use default synthetic dataset", value=True)
+
+st.sidebar.markdown("**Model loading from GitHub (optional)**")
+gh_repo = st.sidebar.text_input("GitHub repo (owner/repo)", value="")  # e.g. "yourname/yourrepo"
+gh_branch = st.sidebar.text_input("Branch", value="main")
+
+# show where models will be looked for
+st.sidebar.write("Model filenames expected in `models/` folder:")
+st.sidebar.write(", ".join(MODEL_FILENAMES.values()))
+
+# load models (attempt local first, then GitHub raw if provided)
+clf, reg, load_info = load_models(github_repo=gh_repo.strip(), github_branch=gh_branch.strip())
 st.sidebar.write(f"Classifier loaded: {'Yes' if clf is not None else 'No'}")
 st.sidebar.write(f"Regressor loaded: {'Yes' if reg is not None else 'No'}")
 
@@ -129,18 +206,28 @@ top_k = st.sidebar.number_input("Top K leads to show", min_value=5, max_value=50
 # Load dataset
 # ------------------------
 if uploaded is not None:
-    df = pd.read_csv(uploaded)
-    st.sidebar.success("Loaded uploaded CSV")
+    try:
+        df = pd.read_csv(uploaded)
+        st.sidebar.success("Loaded uploaded CSV")
+    except Exception as e:
+        st.sidebar.error(f"Failed to read uploaded CSV: {e}")
+        st.stop()
 else:
+    # try default CSV path (useful during dev or on Streamlit server if included in repo)
     if os.path.exists(DEFAULT_CSV_PATH) and use_default:
         df = pd.read_csv(DEFAULT_CSV_PATH)
         st.sidebar.info(f"Loaded default CSV: {DEFAULT_CSV_PATH}")
     else:
-        st.sidebar.warning("No CSV uploaded and default not available; upload a CSV to proceed.")
-        st.stop()
+        # also check repo-local CSV (useful when CSV is committed to repo root)
+        if os.path.exists("b2b_synthetic_dataset.csv") and use_default:
+            df = pd.read_csv("b2b_synthetic_dataset.csv")
+            st.sidebar.info("Loaded default CSV from repo root: b2b_synthetic_dataset.csv")
+        else:
+            st.sidebar.warning("No CSV uploaded and default not available; upload a CSV to proceed.")
+            st.stop()
 
 df = prepare_input(df)
-st.title("B2B Lead Scoring & CLV Dashboard (Synthetic Demo)")
+st.title("B2B Lead Scoring & CLV Dashboard (Optimized)")
 
 # ------------------------
 # Run predictions
@@ -152,17 +239,17 @@ st.markdown("### Run predictions")
 if st.button("Score leads and predict CLV"):
     df_in = df.copy()
 
-    # decide whether to use models or heuristics
     use_model = (clf is not None and reg is not None)
     if use_model:
         st.success("Using trained models for predictions.")
-        # Attempt to align columns expected by model: try/except to be robust
+        # attempt to build X consistent with training expectations:
+        # drop obvious label columns if present
+        X = df_in.drop(columns=[c for c in ['lead_id','true_conversion_prob','converted','CLV_usd'] if c in df_in.columns], errors='ignore')
         try:
-            X = df_in.drop(columns=[c for c in ['lead_id','true_conversion_prob','converted','CLV_usd'] if c in df_in.columns], errors='ignore')
-            pred_proba = clf.predict_proba(X)[:,1]
+            pred_proba = clf.predict_proba(X)[:, 1]
             pred_clv = reg.predict(X)
         except Exception as e:
-            st.warning("Model prediction failed due to input mismatch or missing features. Falling back to heuristics. Error: " + str(e))
+            st.warning("Model prediction failed due to input mismatch. Falling back to heuristics. Error: " + str(e))
             pred_proba = heuristic_lead_score(df_in)
             pred_clv = heuristic_clv(df_in)
     else:
@@ -176,7 +263,6 @@ if st.button("Score leads and predict CLV"):
 
     st.success("Predictions completed — see results below.")
 
-    # Show top K by lead score
     st.markdown(f"### Top {top_k} leads by predicted lead score")
     st.dataframe(df_in.sort_values('predicted_lead_score', ascending=False).head(int(top_k)))
 
@@ -206,14 +292,20 @@ if st.button("Score leads and predict CLV"):
     st.markdown("### Model insights")
     if clf is not None:
         try:
-            feat_imp = clf.named_steps['clf'].feature_importances_
-            pre = clf.named_steps['pre']
-            # get feature names if onehot encoder available
-            num_feats = list(pre.transformers_[0][2])
-            cat_feats = pre.transformers_[1][1].get_feature_names_out(pre.transformers_[1][2])
-            feat_names = num_feats + list(cat_feats)
-            fi_df = pd.DataFrame({'feature': feat_names, 'importance': feat_imp}).sort_values('importance', ascending=False).head(20)
-            st.table(fi_df)
+            pre = clf.named_steps.get('pre', None)
+            pipe_clf = clf.named_steps.get('clf', clf) if hasattr(clf, 'named_steps') else clf
+            importances = pipe_clf.feature_importances_ if hasattr(pipe_clf, 'feature_importances_') else None
+            if importances is not None and pre is not None:
+                try:
+                    num_feats = list(pre.transformers_[0][2])
+                    cat_feats = pre.transformers_[1][1].get_feature_names_out(pre.transformers_[1][2])
+                    feat_names = num_feats + list(cat_feats)
+                    fi_df = pd.DataFrame({'feature': feat_names, 'importance': importances}).sort_values('importance', ascending=False).head(20)
+                    st.table(fi_df)
+                except Exception as e:
+                    st.write("Feature importance extraction failed:", e)
+            else:
+                st.write("Model present but feature importances not available.")
         except Exception as e:
             st.write("Could not extract feature importances automatically:", e)
     else:
@@ -223,24 +315,21 @@ if st.button("Score leads and predict CLV"):
     csv_bytes = to_csv_bytes(df_in)
     st.download_button("Download scored leads CSV", csv_bytes, file_name="scored_leads.csv", mime="text/csv")
 
-    # Expose dataframe for further exploration
+    # show first 200 rows and hot leads option
     st.markdown("### Full scored dataset (first 200 rows)")
     st.dataframe(df_in.head(200))
 
-    # Allow simple filter by hot leads
     if st.checkbox("Show only HOT leads"):
         st.dataframe(df_in[df_in['hot_lead']].sort_values('predicted_lead_score', ascending=False).head(200))
 
 else:
     st.info("Click the button 'Score leads and predict CLV' to compute lead scores and CLV for the dataset.")
 
-# ------------------------
-# Footer / notes
-# ------------------------
+# Footer
 st.markdown("---")
 st.markdown("**Notes & next steps:**")
 st.markdown("""
-- To use trained models, place `lead_scoring_clf.pkl` and `clv_regressor.pkl` in a folder named `models/` in the repo root, or in `/mnt/data/b2b_lead_scoring_project/` (if working in this environment).
-- For per-lead explainability, add SHAP in the pipeline and show `shap.force_plot` or `shap.waterfall_plot` for selected rows (can be added later).
-- For production: replace pickle models with a model server or a job that re-trains periodically, and secure the model artifacts.
+- Place trained pickles in `models/` folder at the repo root (or provide GitHub repo in the sidebar).
+- If using GitHub raw fetch, set `GitHub repo` to `owner/repo` and `Branch` to the branch name.
+- For production, consider serving models from a model store or secured artifact storage instead of raw pickles.
 """)
