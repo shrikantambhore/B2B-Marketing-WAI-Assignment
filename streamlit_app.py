@@ -19,13 +19,6 @@ st.set_page_config(page_title="B2B Lead Scoring & CLV Dashboard", layout="wide")
 # ------------------------
 DEFAULT_CSV_PATH = "b2b_synthetic_dataset.csv"  # default dataset included in environment
 MODEL_DIRS = ["models", "b2b_lead_scoring_project", "/mnt/data"]  # places to look for pickles
-
-@st.cache_data
-import os
-import pickle
-import streamlit as st
-from typing import Tuple, Optional
-
 @st.cache_data(show_spinner=False)
 def load_models() -> Tuple[Optional[object], Optional[object]]:
     """
