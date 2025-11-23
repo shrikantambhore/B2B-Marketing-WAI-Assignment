@@ -1,5 +1,5 @@
 
-# B2B Lead Scoring & CLV - Demo Repo
+# Lead Scoring & Customer Lifetime Value Dashboard 
 
 This GitHub-ready repo contains:
 - `b2b_synthetic_dataset.csv` : Synthetic dataset (5,000 rows) for demo and model training.
